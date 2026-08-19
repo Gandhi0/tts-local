@@ -1,0 +1,80 @@
+# Build Android APK (debug/ProdDebug) and upload as artifact
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      NODE_VERSION: '22.21.0'
+      YARN_VERSION: '1.22.22'
+      JAVA_VERSION: '17'
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable corepack and prepare yarn@1
+        run: |
+          corepack enable
+          corepack prepare yarn@${{ env.YARN_VERSION }} --activate
+
+      - name: Cache Yarn
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/yarn
+            node_modules
+          key: yarn-${{ hashFiles('**/yarn.lock') }}-${{ runner.os }}
+          restore-keys: yarn-
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Install Android SDK cmdline-tools + packages
+        run: |
+          set -e
+          ANDROID_SDK_ROOT=${{ env.ANDROID_SDK_ROOT }}
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          cd $ANDROID_SDK_ROOT
+          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip cmdline-tools.zip -d cmdline-tools
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/cmdline-tools/* cmdline-tools/latest/ || true
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+
+      - name: Build APK (ProdDebug / debug)
+        working-directory: android
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          _JAVA_OPTIONS: -Xmx3g
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean
+          # Ajusta el task según tu package.json. Aquí usamos assembleProdDebug (hay script build:android en package.json)
+          ./gradlew assembleProdDebug --no-daemon || ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: android/app/build/outputs/**/*.apk
